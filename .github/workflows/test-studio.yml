@@ -1,51 +1,43 @@
 
-name: Roblox Studio Installation Test
-
-on:
-  workflow_dispatch:
-
-jobs:
-  install-test:
-    runs-on: windows-2025
-    timeout-minutes: 15
-
-    steps:
-      - name: Download official installer
+      - name: Run installer and diagnose
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $ProgressPreference = "SilentlyContinue"
-
-          $url = "https://setup.rbxcdn.com/RobloxStudioInstaller.exe"
+          $ErrorActionPreference = "Continue"
           $file = "$env:TEMP\RobloxStudioInstaller.exe"
 
-          Invoke-WebRequest -Uri $url -OutFile $file
+          Write-Host "Starting Roblox Studio installer..."
 
-          $sig = Get-AuthenticodeSignature $file
+          $installer = Start-Process `
+            -FilePath $file `
+            -PassThru
 
-          if ($sig.Status -ne "Valid" -or
-              $sig.SignerCertificate.Subject -notlike "*O=Roblox Corporation*") {
-            throw "Roblox installer signature verification failed."
-          }
-
-          Write-Host "Official Roblox installer verified."
-
-      - name: Run installer
-        shell: pwsh
-        run: |
-          $file = "$env:TEMP\RobloxStudioInstaller.exe"
-          Start-Process -FilePath $file
+          Write-Host "Installer PID: $($installer.Id)"
 
           $deadline = (Get-Date).AddMinutes(5)
           $studio = $null
 
-          do {
-            Start-Sleep -Seconds 5
+          $paths = @(
+            "$env:LOCALAPPDATA\Roblox",
+            "$env:ProgramFiles\Roblox",
+            "${env:ProgramFiles(x86)}\Roblox"
+          )
 
-            $studio = Get-ChildItem `
-              "$env:LOCALAPPDATA\Roblox\Versions\*\RobloxStudioBeta.exe" `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
+          do {
+            foreach ($path in $paths) {
+              if (Test-Path $path) {
+                $studio = Get-ChildItem `
+                  -Path $path `
+                  -Filter "RobloxStudioBeta.exe" `
+                  -Recurse `
+                  -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+              }
+              if ($studio) { break }
+            }
+
+            if (-not $studio) {
+              Start-Sleep -Seconds 5
+            }
 
           } until ($studio -or (Get-Date) -gt $deadline)
 
@@ -54,13 +46,33 @@ jobs:
             Write-Host $studio.FullName
           } else {
             Write-Host "INSTALL_NOT_DETECTED"
-          }
 
-      - name: Installation result
-        shell: pwsh
-        run: |
-          if (Test-Path "$env:LOCALAPPDATA\Roblox\Versions") {
-            Get-ChildItem "$env:LOCALAPPDATA\Roblox\Versions"
-          } else {
-            Write-Host "Roblox installation directory not found."
+            if ($installer.HasExited) {
+              Write-Host "Installer exit code: $($installer.ExitCode)"
+            } else {
+              Write-Host "Installer is still running."
+            }
+
+            Write-Host "Roblox-related processes:"
+            Get-Process |
+              Where-Object {
+                $_.ProcessName -match "Roblox|Studio"
+              } |
+              Select-Object ProcessName, Id
+
+            Write-Host "Roblox installation folders:"
+            foreach ($path in $paths) {
+              if (Test-Path $path) {
+                Get-ChildItem $path |
+                  Select-Object Name, FullName
+              }
+            }
+
+            Write-Host "Recent Roblox logs:"
+            $logs = "$env:LOCALAPPDATA\Roblox\logs"
+            if (Test-Path $logs) {
+              Get-ChildItem $logs -File |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 5 Name, Length
+            }
           }
