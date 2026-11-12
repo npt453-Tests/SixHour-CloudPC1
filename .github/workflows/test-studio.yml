@@ -1,0 +1,66 @@
+
+name: Roblox Studio Installation Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  install-test:
+    runs-on: windows-2025
+    timeout-minutes: 15
+
+    steps:
+      - name: Download official installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+
+          $url = "https://setup.rbxcdn.com/RobloxStudioInstaller.exe"
+          $file = "$env:TEMP\RobloxStudioInstaller.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $file
+
+          $sig = Get-AuthenticodeSignature $file
+
+          if ($sig.Status -ne "Valid" -or
+              $sig.SignerCertificate.Subject -notlike "*O=Roblox Corporation*") {
+            throw "Roblox installer signature verification failed."
+          }
+
+          Write-Host "Official Roblox installer verified."
+
+      - name: Run installer
+        shell: pwsh
+        run: |
+          $file = "$env:TEMP\RobloxStudioInstaller.exe"
+          Start-Process -FilePath $file
+
+          $deadline = (Get-Date).AddMinutes(5)
+          $studio = $null
+
+          do {
+            Start-Sleep -Seconds 5
+
+            $studio = Get-ChildItem `
+              "$env:LOCALAPPDATA\Roblox\Versions\*\RobloxStudioBeta.exe" `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+
+          } until ($studio -or (Get-Date) -gt $deadline)
+
+          if ($studio) {
+            Write-Host "STUDIO_INSTALLED"
+            Write-Host $studio.FullName
+          } else {
+            Write-Host "INSTALL_NOT_DETECTED"
+          }
+
+      - name: Installation result
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:LOCALAPPDATA\Roblox\Versions") {
+            Get-ChildItem "$env:LOCALAPPDATA\Roblox\Versions"
+          } else {
+            Write-Host "Roblox installation directory not found."
+          }
